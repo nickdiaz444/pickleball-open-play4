@@ -1,7 +1,6 @@
 import streamlit as st
 import json
 from pathlib import Path
-import random
 import pandas as pd
 
 DATA_FILE = Path("pickleball_data.json")
@@ -83,11 +82,30 @@ def process_court_winner(court_index, winning_team):
     winners = team1 if winning_team == "Team 1" else team2
     losers = team2 if winning_team == "Team 1" else team1
 
-    # Increment streaks for winners, reset for losers
-    for player in winners:
+    # Determine staying winners and leaving winners
+    staying_winners = [p for p in winners if data["streaks"].get(p, 0) < 2]
+    leaving_winners = [p for p in winners if data["streaks"].get(p, 0) >= 2]
+
+    # Increment streaks for staying winners
+    for player in staying_winners:
         data["streaks"][player] = data["streaks"].get(player, 0) + 1
-    for player in losers:
+
+    # Reset streaks for leaving winners and losers
+    for player in losers + leaving_winners:
         data["streaks"][player] = 0
+        if player not in data["queue"]:
+            data["queue"].append(player)
+
+    # Fill empty spots from queue
+    needed = 4 - len(staying_winners)
+    new_players = []
+    for _ in range(needed):
+        if len(data["queue"]) > 0:
+            new_player = data["queue"].pop(0)
+            new_players.append(new_player)
+
+    # Rebuild court: staying winners + new players
+    data["courts"][court_index] = staying_winners + new_players
 
     # Record in history
     data["history"].append({
@@ -95,28 +113,6 @@ def process_court_winner(court_index, winning_team):
         "team_won": winning_team,
         "players": court_players.copy()
     })
-
-    # Two-game limit
-    staying_players = [p for p in winners if data["streaks"].get(p, 0) < 2]
-    leaving_players = [p for p in winners if data["streaks"].get(p, 0) >= 2]
-
-    # Move losers + leaving winners to back of queue
-    for player in losers + leaving_players:
-        if player not in data["queue"]:
-            data["queue"].append(player)
-        data["streaks"][player] = 0
-
-    # Fill in replacements
-    while len(staying_players) < 2 and len(data["queue"]) > 0:
-        staying_players.append(data["queue"].pop(0))
-
-    new_players = []
-    while len(new_players) < 2 and len(data["queue"]) > 0:
-        new_players.append(data["queue"].pop(0))
-
-    court_players_new = staying_players + new_players
-    random.shuffle(court_players_new)
-    data["courts"][court_index] = court_players_new
 
 def update_all_courts():
     for i, winner in enumerate(st.session_state.court_winners):
@@ -202,7 +198,7 @@ with tabs[0]:
             col1.markdown(f"**Team 1:** {', '.join(court_players[:2])}")
             col2.markdown(f"**Team 2:** {', '.join(court_players[2:])}")
 
-            # Winner dropdown for this court with a unique key
+            # Winner dropdown with unique key
             winner_key = f"court_winner_{i}"
             selected_winner = st.selectbox(
                 f"Select winner (Court {i + 1})",
@@ -210,7 +206,6 @@ with tabs[0]:
                 index=0 if st.session_state.court_winners[i] is None else ["", "Team 1", "Team 2"].index(st.session_state.court_winners[i]),
                 key=winner_key
             )
-            # Save the selection to session_state
             st.session_state.court_winners[i] = selected_winner
 
             col1b, col2b = st.columns(2)
@@ -235,7 +230,6 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("Game History")
     if data["history"]:
-        # Flatten history into table rows
         history_rows = []
         for entry in data["history"]:
             history_rows.append({
