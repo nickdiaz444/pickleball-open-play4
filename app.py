@@ -8,7 +8,6 @@ DATA_FILE = Path("pickleball_data.json")
 # ---------------------------
 # Helpers for persistent storage
 # ---------------------------
-
 def load_json(file_path):
     if not file_path.exists():
         return {
@@ -29,21 +28,16 @@ def save_json(file_path, data):
 # ---------------------------
 # Initialize session state
 # ---------------------------
-
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
     data = load_json(DATA_FILE)
     st.session_state.data = data
-    st.session_state.court_winners = [None] * 3
 else:
     data = st.session_state.data
-    if "court_winners" not in st.session_state:
-        st.session_state.court_winners = [None] * 3
 
 # ---------------------------
 # Utility functions
 # ---------------------------
-
 def reset_everything():
     st.session_state.data = {
         "players": [],
@@ -53,7 +47,6 @@ def reset_everything():
         "history": [],
         "auto_fill": False
     }
-    st.session_state.court_winners = [None] * 3
     save_json(DATA_FILE, st.session_state.data)
     st.success("All data reset!")
 
@@ -82,29 +75,27 @@ def process_court_winner(court_index, winning_team):
     winners = team1 if winning_team == "Team 1" else team2
     losers = team2 if winning_team == "Team 1" else team1
 
-    # Determine staying winners and leaving winners
-    staying_winners = [p for p in winners if data["streaks"].get(p, 0) < 2]
-    leaving_winners = [p for p in winners if data["streaks"].get(p, 0) >= 2]
+    # Determine staying winners and leaving winners (max 2 games)
+    staying_winners = [p for p in winners if data["streaks"].get(p,0) < 2]
+    leaving_winners = [p for p in winners if data["streaks"].get(p,0) >= 2]
 
     # Increment streaks for staying winners
     for player in staying_winners:
-        data["streaks"][player] = data["streaks"].get(player, 0) + 1
+        data["streaks"][player] = data["streaks"].get(player,0) + 1
 
-    # Reset streaks for leaving winners and losers
+    # Reset streaks for leaving winners and losers; send to back of queue
     for player in losers + leaving_winners:
         data["streaks"][player] = 0
         if player not in data["queue"]:
             data["queue"].append(player)
 
-    # Fill empty spots from queue
+    # Fill court up to 4 players from queue
     needed = 4 - len(staying_winners)
     new_players = []
     for _ in range(needed):
         if len(data["queue"]) > 0:
-            new_player = data["queue"].pop(0)
-            new_players.append(new_player)
+            new_players.append(data["queue"].pop(0))
 
-    # Rebuild court: staying winners + new players
     data["courts"][court_index] = staying_winners + new_players
 
     # Record in history
@@ -115,11 +106,12 @@ def process_court_winner(court_index, winning_team):
     })
 
 def update_all_courts():
-    for i, winner in enumerate(st.session_state.court_winners):
+    for i in range(len(data["courts"])):
+        winner = st.session_state.get(f"court_winner_{i}", "")
         if winner in ["Team 1", "Team 2"]:
             process_court_winner(i, winner)
-    st.session_state.court_winners = [None] * 3
-    save_json(DATA_FILE, st.session_state.data)
+            st.session_state[f"court_winner_{i}"] = ""  # clear selection
+    save_json(DATA_FILE, data)
     auto_fill_if_enabled()
     st.success("All courts updated!")
 
@@ -135,7 +127,6 @@ def reset_single_court(court_index):
     auto_fill_if_enabled()
 
 def reset_all_courts():
-    data = st.session_state.data
     for i in range(len(data["courts"])):
         reset_single_court(i)
     st.success("All courts reset — players moved to back of queue.")
@@ -143,13 +134,11 @@ def reset_all_courts():
 # ---------------------------
 # Sidebar Config
 # ---------------------------
-
 st.sidebar.header("⚙️ Configuration")
 st.session_state.data["auto_fill"] = st.sidebar.checkbox("Auto-Fill Courts Continuously", value=data.get("auto_fill", False))
 
 if st.sidebar.button("Reset All Data"):
     reset_everything()
-
 if st.sidebar.button("Reset All Courts"):
     reset_all_courts()
 
@@ -169,13 +158,11 @@ with st.sidebar.expander("Player Management"):
 # ---------------------------
 # Main Page
 # ---------------------------
-
 st.title("🏓 Pickleball Open Play Scheduler")
-
 tabs = st.tabs(["Courts", "Queue", "History"])
 
 # ---------------------------
-# COURTS TAB
+# Courts Tab
 # ---------------------------
 with tabs[0]:
     st.subheader("Active Courts")
@@ -184,7 +171,6 @@ with tabs[0]:
     if st.button("Assign all empty courts"):
         assign_all_courts()
         st.success("Courts filled from queue.")
-
     st.divider()
 
     for i in range(num_courts):
@@ -198,15 +184,16 @@ with tabs[0]:
             col1.markdown(f"**Team 1:** {', '.join(court_players[:2])}")
             col2.markdown(f"**Team 2:** {', '.join(court_players[2:])}")
 
-            # Winner dropdown with unique key
+            # Winner dropdown with persistent key
             winner_key = f"court_winner_{i}"
-            selected_winner = st.selectbox(
+            if winner_key not in st.session_state:
+                st.session_state[winner_key] = ""
+            st.session_state[winner_key] = st.selectbox(
                 f"Select winner (Court {i + 1})",
-                options=["", "Team 1", "Team 2"],
-                index=0 if st.session_state.court_winners[i] is None else ["", "Team 1", "Team 2"].index(st.session_state.court_winners[i]),
-                key=winner_key
+                ["", "Team 1", "Team 2"],
+                index=["", "Team 1", "Team 2"].index(st.session_state[winner_key]),
+                key=winner_key+"_selectbox"
             )
-            st.session_state.court_winners[i] = selected_winner
 
             col1b, col2b = st.columns(2)
             with col1b:
@@ -218,14 +205,14 @@ with tabs[0]:
         update_all_courts()
 
 # ---------------------------
-# QUEUE TAB
+# Queue Tab
 # ---------------------------
 with tabs[1]:
     st.subheader("Queue (Next Up)")
     st.write(", ".join(data["queue"]))
 
 # ---------------------------
-# HISTORY TAB
+# History Tab
 # ---------------------------
 with tabs[2]:
     st.subheader("Game History")
