@@ -35,7 +35,7 @@ if "initialized" not in st.session_state:
     st.session_state.initialized = True
     data = load_json(DATA_FILE)
     st.session_state.data = data
-    st.session_state.court_winners = [None] * 3  # store dropdown selections
+    st.session_state.court_winners = [None] * 3
 else:
     data = st.session_state.data
     if "court_winners" not in st.session_state:
@@ -202,12 +202,16 @@ with tabs[0]:
             col1.markdown(f"**Team 1:** {', '.join(court_players[:2])}")
             col2.markdown(f"**Team 2:** {', '.join(court_players[2:])}")
 
-            # Winner dropdown for this court
-            st.session_state.court_winners[i] = st.selectbox(
+            # Winner dropdown for this court with a unique key
+            winner_key = f"court_winner_{i}"
+            selected_winner = st.selectbox(
                 f"Select winner (Court {i + 1})",
                 options=["", "Team 1", "Team 2"],
-                index=0 if st.session_state.court_winners[i] is None else ["", "Team 1", "Team 2"].index(st.session_state.court_winners[i])
+                index=0 if st.session_state.court_winners[i] is None else ["", "Team 1", "Team 2"].index(st.session_state.court_winners[i]),
+                key=winner_key
             )
+            # Save the selection to session_state
+            st.session_state.court_winners[i] = selected_winner
 
             col1b, col2b = st.columns(2)
             with col1b:
