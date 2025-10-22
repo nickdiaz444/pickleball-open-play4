@@ -2,6 +2,7 @@ import streamlit as st
 import json
 from pathlib import Path
 import random
+import pandas as pd
 
 DATA_FILE = Path("pickleball_data.json")
 
@@ -11,7 +12,14 @@ DATA_FILE = Path("pickleball_data.json")
 
 def load_json(file_path):
     if not file_path.exists():
-        return {"players": [], "queue": [], "courts": [[], [], []], "streaks": {}, "history": [], "auto_fill": False}
+        return {
+            "players": [],
+            "queue": [],
+            "courts": [[], [], []],
+            "streaks": {},
+            "history": [],
+            "auto_fill": False
+        }
     with open(file_path, "r") as f:
         return json.load(f)
 
@@ -19,13 +27,19 @@ def save_json(file_path, data):
     with open(file_path, "w") as f:
         json.dump(data, f, indent=4)
 
+# ---------------------------
 # Initialize session state
+# ---------------------------
+
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
     data = load_json(DATA_FILE)
     st.session_state.data = data
+    st.session_state.court_winners = [None] * 3  # store dropdown selections
 else:
     data = st.session_state.data
+    if "court_winners" not in st.session_state:
+        st.session_state.court_winners = [None] * 3
 
 # ---------------------------
 # Utility functions
@@ -40,6 +54,7 @@ def reset_everything():
         "history": [],
         "auto_fill": False
     }
+    st.session_state.court_winners = [None] * 3
     save_json(DATA_FILE, st.session_state.data)
     st.success("All data reset!")
 
@@ -56,7 +71,7 @@ def auto_fill_if_enabled():
     if st.session_state.data.get("auto_fill", False):
         assign_all_courts()
 
-def submit_winner(court_index, winning_team):
+def process_court_winner(court_index, winning_team):
     data = st.session_state.data
     court_players = data["courts"][court_index]
     if len(court_players) != 4:
@@ -65,14 +80,21 @@ def submit_winner(court_index, winning_team):
     team1 = court_players[:2]
     team2 = court_players[2:]
 
-    winners = team1 if winning_team == 1 else team2
-    losers = team2 if winning_team == 1 else team1
+    winners = team1 if winning_team == "Team 1" else team2
+    losers = team2 if winning_team == "Team 1" else team1
 
-    # Update streaks
+    # Increment streaks for winners, reset for losers
     for player in winners:
         data["streaks"][player] = data["streaks"].get(player, 0) + 1
     for player in losers:
         data["streaks"][player] = 0
+
+    # Record in history
+    data["history"].append({
+        "court": court_index + 1,
+        "team_won": winning_team,
+        "players": court_players.copy()
+    })
 
     # Two-game limit
     staying_players = [p for p in winners if data["streaks"].get(p, 0) < 2]
@@ -95,8 +117,15 @@ def submit_winner(court_index, winning_team):
     court_players_new = staying_players + new_players
     random.shuffle(court_players_new)
     data["courts"][court_index] = court_players_new
-    save_json(DATA_FILE, data)
+
+def update_all_courts():
+    for i, winner in enumerate(st.session_state.court_winners):
+        if winner in ["Team 1", "Team 2"]:
+            process_court_winner(i, winner)
+    st.session_state.court_winners = [None] * 3
+    save_json(DATA_FILE, st.session_state.data)
     auto_fill_if_enabled()
+    st.success("All courts updated!")
 
 def reset_single_court(court_index):
     data = st.session_state.data
@@ -112,14 +141,7 @@ def reset_single_court(court_index):
 def reset_all_courts():
     data = st.session_state.data
     for i in range(len(data["courts"])):
-        court_players = data["courts"][i]
-        for player in court_players:
-            data["streaks"][player] = 0
-            if player not in data["queue"]:
-                data["queue"].append(player)
-        data["courts"][i] = []
-    save_json(DATA_FILE, data)
-    auto_fill_if_enabled()
+        reset_single_court(i)
     st.success("All courts reset — players moved to back of queue.")
 
 # ---------------------------
@@ -127,18 +149,14 @@ def reset_all_courts():
 # ---------------------------
 
 st.sidebar.header("⚙️ Configuration")
-
-# Auto-Fill toggle
 st.session_state.data["auto_fill"] = st.sidebar.checkbox("Auto-Fill Courts Continuously", value=data.get("auto_fill", False))
 
-# Reset buttons
 if st.sidebar.button("Reset All Data"):
     reset_everything()
 
 if st.sidebar.button("Reset All Courts"):
     reset_all_courts()
 
-# Collapsible Settings
 with st.sidebar.expander("Player Management"):
     st.write("Add multiple players at once (one per line):")
     bulk_input = st.text_area("Enter player names", height=150, placeholder="Player 1\nPlayer 2\nPlayer 3...")
@@ -153,45 +171,78 @@ with st.sidebar.expander("Player Management"):
         st.success(f"Added {len(new_players)} players.")
 
 # ---------------------------
-# Main Page - Courts
+# Main Page
 # ---------------------------
 
 st.title("🏓 Pickleball Open Play Scheduler")
-st.subheader("Active Courts")
 
-num_courts = len(data["courts"])
+tabs = st.tabs(["Courts", "Queue", "History"])
 
-if st.button("Assign all empty courts"):
-    assign_all_courts()
-    st.success("Courts filled from queue.")
+# ---------------------------
+# COURTS TAB
+# ---------------------------
+with tabs[0]:
+    st.subheader("Active Courts")
+    num_courts = len(data["courts"])
 
-st.divider()
+    if st.button("Assign all empty courts"):
+        assign_all_courts()
+        st.success("Courts filled from queue.")
 
-for i in range(num_courts):
-    court_players = data["courts"][i]
-    st.markdown(f"### Court {i + 1}")
+    st.divider()
 
-    if len(court_players) == 0:
-        st.info("Empty court")
+    for i in range(num_courts):
+        court_players = data["courts"][i]
+        st.markdown(f"### Court {i + 1}")
+
+        if len(court_players) == 0:
+            st.info("Empty court")
+        else:
+            col1, col2 = st.columns(2)
+            col1.markdown(f"**Team 1:** {', '.join(court_players[:2])}")
+            col2.markdown(f"**Team 2:** {', '.join(court_players[2:])}")
+
+            # Winner dropdown for this court
+            st.session_state.court_winners[i] = st.selectbox(
+                f"Select winner (Court {i + 1})",
+                options=["", "Team 1", "Team 2"],
+                index=0 if st.session_state.court_winners[i] is None else ["", "Team 1", "Team 2"].index(st.session_state.court_winners[i])
+            )
+
+            col1b, col2b = st.columns(2)
+            with col1b:
+                if st.button(f"Reset Court {i + 1}", key=f"reset_{i}"):
+                    reset_single_court(i)
+                    st.info(f"Court {i + 1} reset.")
+
+    if st.button("Update All Courts"):
+        update_all_courts()
+
+# ---------------------------
+# QUEUE TAB
+# ---------------------------
+with tabs[1]:
+    st.subheader("Queue (Next Up)")
+    st.write(", ".join(data["queue"]))
+
+# ---------------------------
+# HISTORY TAB
+# ---------------------------
+with tabs[2]:
+    st.subheader("Game History")
+    if data["history"]:
+        # Flatten history into table rows
+        history_rows = []
+        for entry in data["history"]:
+            history_rows.append({
+                "Court": entry["court"],
+                "Winner": entry["team_won"],
+                "Player 1": entry["players"][0],
+                "Player 2": entry["players"][1],
+                "Player 3": entry["players"][2],
+                "Player 4": entry["players"][3],
+            })
+        df_history = pd.DataFrame(history_rows)
+        st.dataframe(df_history)
     else:
-        col1, col2 = st.columns(2)
-        col1.markdown(f"**Team 1:** {', '.join(court_players[:2])}")
-        col2.markdown(f"**Team 2:** {', '.join(court_players[2:])}")
-
-        col1b, col2b, col3b = st.columns(3)
-        with col1b:
-            if st.button(f"Team 1 Wins (Court {i + 1})"):
-                submit_winner(i, 1)
-                st.success(f"Team 1 Wins on Court {i + 1}")
-        with col2b:
-            if st.button(f"Team 2 Wins (Court {i + 1})"):
-                submit_winner(i, 2)
-                st.success(f"Team 2 Wins on Court {i + 1}")
-        with col3b:
-            if st.button(f"Reset Court {i + 1}"):
-                reset_single_court(i)
-                st.info(f"Court {i + 1} reset.")
-
-st.divider()
-st.subheader("Queue (Next Up)")
-st.write(", ".join(data["queue"]))
+        st.info("No games played yet.")
