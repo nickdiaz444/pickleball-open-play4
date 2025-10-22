@@ -44,24 +44,19 @@ def reset_everything():
     st.success("All data reset!")
 
 def assign_all_courts():
-    """Fill each empty court with 4 players (2v2) from the queue."""
     data = st.session_state.data
     queue = data["queue"]
     courts = data["courts"]
-
     for i in range(len(courts)):
         if len(courts[i]) < 4 and len(queue) >= 4:
             courts[i] = [queue.pop(0) for _ in range(4)]
-
     save_json(DATA_FILE, data)
 
 def auto_fill_if_enabled():
-    """Automatically fill courts if Auto-Fill mode is active."""
     if st.session_state.data.get("auto_fill", False):
         assign_all_courts()
 
 def submit_winner(court_index, winning_team):
-    """Handle winners/losers and enforce the two-game limit."""
     data = st.session_state.data
     court_players = data["courts"][court_index]
     if len(court_players) != 4:
@@ -73,23 +68,23 @@ def submit_winner(court_index, winning_team):
     winners = team1 if winning_team == 1 else team2
     losers = team2 if winning_team == 1 else team1
 
-    # Increment streaks for winners, reset for losers
+    # Update streaks
     for player in winners:
         data["streaks"][player] = data["streaks"].get(player, 0) + 1
     for player in losers:
         data["streaks"][player] = 0
 
-    # Check for 2-game limit
+    # Two-game limit
     staying_players = [p for p in winners if data["streaks"].get(p, 0) < 2]
     leaving_players = [p for p in winners if data["streaks"].get(p, 0) >= 2]
 
-    # Always move losers + over-limit winners to back of queue
+    # Move losers + leaving winners to back of queue
     for player in losers + leaving_players:
         if player not in data["queue"]:
             data["queue"].append(player)
         data["streaks"][player] = 0
 
-    # Bring in replacements
+    # Fill in replacements
     while len(staying_players) < 2 and len(data["queue"]) > 0:
         staying_players.append(data["queue"].pop(0))
 
@@ -101,11 +96,9 @@ def submit_winner(court_index, winning_team):
     random.shuffle(court_players_new)
     data["courts"][court_index] = court_players_new
     save_json(DATA_FILE, data)
-
-    auto_fill_if_enabled()  # auto-fill after game if toggle on
+    auto_fill_if_enabled()
 
 def reset_single_court(court_index):
-    """Clears one court and moves its players to the back of the queue."""
     data = st.session_state.data
     court_players = data["courts"][court_index]
     for player in court_players:
@@ -117,7 +110,6 @@ def reset_single_court(court_index):
     auto_fill_if_enabled()
 
 def reset_all_courts():
-    """Moves all active players from all courts to the end of the queue."""
     data = st.session_state.data
     for i in range(len(data["courts"])):
         court_players = data["courts"][i]
@@ -131,22 +123,26 @@ def reset_all_courts():
     st.success("All courts reset — players moved to back of queue.")
 
 # ---------------------------
-# Streamlit UI
+# Sidebar Config
 # ---------------------------
 
-st.title("🏓 Pickleball Open Play Scheduler")
-page = st.sidebar.radio("Navigation", ["Config / Player Setup", "Court Management"])
+st.sidebar.header("⚙️ Configuration")
 
-# ---------------------------
-# CONFIG PAGE
-# ---------------------------
+# Auto-Fill toggle
+st.session_state.data["auto_fill"] = st.sidebar.checkbox("Auto-Fill Courts Continuously", value=data.get("auto_fill", False))
 
-if page == "Config / Player Setup":
-    st.header("Player & Queue Setup")
+# Reset buttons
+if st.sidebar.button("Reset All Data"):
+    reset_everything()
 
-    st.write("Add multiple players at once (one name per line):")
+if st.sidebar.button("Reset All Courts"):
+    reset_all_courts()
+
+# Collapsible Settings
+with st.sidebar.expander("Player Management"):
+    st.write("Add multiple players at once (one per line):")
     bulk_input = st.text_area("Enter player names", height=150, placeholder="Player 1\nPlayer 2\nPlayer 3...")
-    if st.button("Add Players"):
+    if st.button("Add Players", key="add_players_sidebar"):
         new_players = [p.strip() for p in bulk_input.splitlines() if p.strip()]
         for player in new_players:
             if player not in data["players"]:
@@ -156,65 +152,46 @@ if page == "Config / Player Setup":
         save_json(DATA_FILE, data)
         st.success(f"Added {len(new_players)} players.")
 
-    st.toggle("Auto-Fill Courts Continuously", key="auto_fill", value=data.get("auto_fill", False))
-    data["auto_fill"] = st.session_state.auto_fill
-    save_json(DATA_FILE, data)
-
-    if st.button("Clear All Data"):
-        reset_everything()
-
-    st.subheader("Current Players")
-    st.write(data["players"])
-
-    st.subheader("Current Queue (Top → Bottom)")
-    st.write(data["queue"])
-
 # ---------------------------
-# COURT MANAGEMENT PAGE
+# Main Page - Courts
 # ---------------------------
 
-elif page == "Court Management":
-    st.header("Court Assignments")
-    num_courts = len(data["courts"])
+st.title("🏓 Pickleball Open Play Scheduler")
+st.subheader("Active Courts")
 
-    if st.button("Assign all empty courts"):
-        assign_all_courts()
-        st.success("Courts filled from queue.")
+num_courts = len(data["courts"])
 
-    st.divider()
-    st.subheader("Active Courts")
+if st.button("Assign all empty courts"):
+    assign_all_courts()
+    st.success("Courts filled from queue.")
 
-    for i in range(num_courts):
-        court_players = data["courts"][i]
-        st.markdown(f"### Court {i + 1}")
+st.divider()
 
-        if len(court_players) == 0:
-            st.info("Empty court")
-        else:
-            col1, col2 = st.columns(2)
-            col1.write("Team 1:")
-            col1.write(court_players[:2])
-            col2.write("Team 2:")
-            col2.write(court_players[2:])
+for i in range(num_courts):
+    court_players = data["courts"][i]
+    st.markdown(f"### Court {i + 1}")
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button(f"Team 1 Wins (Court {i + 1})"):
-                    submit_winner(i, 1)
-                    st.success(f"Team 1 Wins on Court {i + 1}")
-            with col2:
-                if st.button(f"Team 2 Wins (Court {i + 1})"):
-                    submit_winner(i, 2)
-                    st.success(f"Team 2 Wins on Court {i + 1}")
-            with col3:
-                if st.button(f"Reset Court {i + 1}"):
-                    reset_single_court(i)
-                    st.info(f"Court {i + 1} reset.")
+    if len(court_players) == 0:
+        st.info("Empty court")
+    else:
+        col1, col2 = st.columns(2)
+        col1.markdown(f"**Team 1:** {', '.join(court_players[:2])}")
+        col2.markdown(f"**Team 2:** {', '.join(court_players[2:])}")
 
-        st.divider()
+        col1b, col2b, col3b = st.columns(3)
+        with col1b:
+            if st.button(f"Team 1 Wins (Court {i + 1})"):
+                submit_winner(i, 1)
+                st.success(f"Team 1 Wins on Court {i + 1}")
+        with col2b:
+            if st.button(f"Team 2 Wins (Court {i + 1})"):
+                submit_winner(i, 2)
+                st.success(f"Team 2 Wins on Court {i + 1}")
+        with col3b:
+            if st.button(f"Reset Court {i + 1}"):
+                reset_single_court(i)
+                st.info(f"Court {i + 1} reset.")
 
-    if st.button("Reset All Courts"):
-        reset_all_courts()
-
-    st.subheader("Queue (Next Up)")
-    st.write(data["queue"])
+st.divider()
+st.subheader("Queue (Next Up)")
+st.write(", ".join(data["queue"]))
